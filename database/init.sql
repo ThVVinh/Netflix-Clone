@@ -24,7 +24,7 @@ CREATE TABLE [dbo].[user] (
     email NVARCHAR(255) NOT NULL UNIQUE,
     password NVARCHAR(255) NOT NULL,
     name NVARCHAR(255) NOT NULL,
-    gender NVARCHAR(50) NOT NULL CHECK (type IN ('male', 'female')),
+    gender NVARCHAR(50) NOT NULL CHECK (gender IN ('male', 'female')),
     dob DATE NOT NULL,
 
     CONSTRAINT [User email format is invalid] CHECK (email LIKE '%_@__%.__%'),
@@ -79,17 +79,16 @@ CREATE TABLE [dbo].[movie_genre] (
     FOREIGN KEY (genre_id) REFERENCES [dbo].[genre](id) ON DELETE CASCADE
 );
 
-IF OBJECT_ID('[dbo].[Media]', 'U') IS NOT NULL
+IF OBJECT_ID('[dbo].[media]', 'U') IS NOT NULL
     DROP TABLE [dbo].[Media];
 
-CREATE TABLE [dbo].[Media] (
+CREATE TABLE [dbo].[media] (
     id INT IDENTITY(1,1) PRIMARY KEY,
     movie_id INT NOT NULL,
     type NVARCHAR(50) NOT NULL CHECK (type IN ('trailer', 'video')),
     url NVARCHAR(2083) NOT NULL,
 
     FOREIGN KEY (movie_id) REFERENCES [dbo].[movie](id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES [dbo].[user](id) ON DELETE CASCADE,
     CONSTRAINT [Media URL format is invalid] CHECK (url LIKE 'http%')
 );
 
@@ -192,11 +191,67 @@ CREATE TABLE [dbo].[transaction_detail] (
 PRINT 'Database netflix_clone created successfully.'
 GO
 
-CREATE OR ALTER TRIGGER [dbo].[tg_transaction_insert_updateAmount]
-ON [dbo].[transaction]
+CREATE OR ALTER TRIGGER [dbo].[tg_TransactionDetail_aiud_updateAmount]
+ON [dbo].[transaction_detail]
+AFTER INSERT, UPDATE, DELETE
+AS
+BEGIN TRANSACTION
+    SET XACT_ABORT ON
+	SET NOCOUNT ON
+
+    DECLARE @TransactionIds TABLE(id INT);
+
+    INSERT INTO @TransactionIds
+    SELECT id FROM [dbo].[transaction]
+    UNION
+    SELECT transaction_id FROM [dbo].[transaction_detail];
+
+    UPDATE T 
+    SET T.amount = ISNULL((
+        SELECT SUM(TD.price)
+        FROM [dbo].[transaction_detail] TD
+        WHERE TD.transaction_id = T.id
+    ), 0)
+    FROM [dbo].[transaction] T
+    JOIN @TransactionIds TI ON T.id = TI.id;
+
+COMMIT TRANSACTION
+GO
+
+CREATE OR ALTER TRIGGER [dbo].[tg_TransactionDetail_insert_updatePrice]
+ON [dbo].[transaction_detail]
 AFTER INSERT
 AS
 BEGIN TRANSACTION
+    SET XACT_ABORT ON
+	SET NOCOUNT ON
 
+    UPDATE TD
+    SET TD.price = ISNULL(M.price, 0)
+    FROM [dbo].[transaction_detail] TD
+    JOIN inserted I ON I.transaction_id = TD.transaction_id 
+                         AND I.movie_id = TD.movie_id
+    JOIN [dbo].[movie] M ON M.id = TD.movie_id;
+
+COMMIT TRANSACTION
+GO
+
+CREATE OR ALTER TRIGGER [dbo].[tg_review_insert_updateRating]
+ON [dbo].[review]
+AFTER INSERT
+AS
+BEGIN TRANSACTION
+	SET XACT_ABORT ON
+	SET NOCOUNT ON
+
+    DECLARE @movieIds INT = (SELECT movie_id FROM inserted);
+
+	UPDATE [dbo].[movie]
+	SET raterCount += 1
+	WHERE id = @movieIds;
+
+	UPDATE [dbo].[movie]
+	SET rating = (rating * raterCount + (SELECT rating FROM inserted)) / raterCount
+	WHERE id = @movieIds;
 COMMIT TRANSACTION
 GO
