@@ -123,43 +123,72 @@ IF OBJECT_ID('[dbo].[review]', 'U') IS NOT NULL
     DROP TABLE [dbo].[review];
 
 CREATE TABLE [dbo].[review] (
+    id INT IDENTITY(1,1) PRIMARY KEY,
     created_at DATETIME DEFAULT GETDATE(),
-    user_id INT NOT NULL,
     movie_id INT NOT NULL,
+    user_name NVARCHAR(255) NOT NULL,
     rating DECIMAL(3, 1) CHECK (rating >= 0 AND rating <= 5),
-    comment NVARCHAR(MAX) NOT NULL,
-
-    PRIMARY KEY (created_at, user_id, movie_id),
-
-    FOREIGN KEY (user_id) REFERENCES [dbo].[user](id) ON DELETE CASCADE,
+    content NVARCHAR(MAX) NOT NULL,
+    
     FOREIGN KEY (movie_id) REFERENCES [dbo].[movie](id) ON DELETE CASCADE
 );
 GO
 
-IF OBJECT_ID('[dbo].[person]', 'U') IS NOT NULL
-    DROP TABLE [dbo].[person];
+IF OBJECT_ID('[dbo].[people]', 'U') IS NOT NULL
+    DROP TABLE [dbo].[people];
 
-CREATE TABLE [dbo].[person] (
+CREATE TABLE [dbo].[people] (
     id INT IDENTITY(1,1) PRIMARY KEY,   
     name NVARCHAR(255) NOT NULL,
-    biography NVARCHAR(MAX) NOT NULL,
-    dob DATE NOT NULL,
-    photo_url NVARCHAR(2083) NOT NULL check (photo_url LIKE 'http%'),
+    biography NVARCHAR(MAX),
+    dob DATE,
+    photo_url NVARCHAR(2083) check (photo_url LIKE 'http%'),
     gender NVARCHAR(50) NOT NULL CHECK (gender IN ('male', 'female'))
+
+    CONSTRAINT [People name must be unique] UNIQUE (name)
 );
 
+ALTER TABLE [dbo].[people]
+ADD id_actor INT UNIQUE
 
-IF OBJECT_ID('[dbo].[movie_person]', 'U') IS NOT NULL
-    DROP TABLE [dbo].[movie_person];
+IF OBJECT_ID('[dbo].[credit]', 'U') IS NOT NULL
+    DROP TABLE [dbo].[credit];
 
-CREATE TABLE [dbo].[movie_person] (
+CREATE TABLE [dbo].[credit] (
+    id INT IDENTITY(1,1) PRIMARY KEY,
     movie_id INT NOT NULL,
-    person_id INT NOT NULL,
-    role NVARCHAR(50) NOT NULL CHECK (role IN ('actor', 'director', 'producer')),
-    PRIMARY KEY (movie_id, person_id, role),
+    people_id INT NOT NULL,
+    department NVARCHAR(50) NOT NULL,
+    credit_type NVARCHAR(255) NOT NULL CHECK (credit_type IN ('cast', 'crew')),
 
+    CONSTRAINT [UQ_credit] UNIQUE (movie_id, people_id, department, credit_type),
     FOREIGN KEY (movie_id) REFERENCES [dbo].[movie](id) ON DELETE CASCADE,
-    FOREIGN KEY (person_id) REFERENCES [dbo].[person](id) ON DELETE CASCADE
+    FOREIGN KEY (people_id) REFERENCES [dbo].[people](id) ON DELETE CASCADE
+);
+GO
+
+
+IF OBJECT_ID('[dbo].[cast]', 'U') IS NOT NULL
+    DROP TABLE [dbo].[cast];
+
+CREATE TABLE [dbo].[cast] (
+    credit_id INT NOT NULL,
+    character_name NVARCHAR(255) NOT NULL,
+    PRIMARY KEY (credit_id),
+
+    FOREIGN KEY (credit_id) REFERENCES [dbo].[credit](id) ON DELETE CASCADE
+);
+GO
+
+IF OBJECT_ID('[dbo].[crew]', 'U') IS NOT NULL
+    DROP TABLE [dbo].[crew];
+
+CREATE TABLE [dbo].[crew] (
+    credit_id INT NOT NULL,
+    job NVARCHAR(255) NOT NULL,
+    PRIMARY KEY (credit_id),
+
+    FOREIGN KEY (credit_id) REFERENCES [dbo].[credit](id) ON DELETE CASCADE
 );
 GO
 
@@ -169,12 +198,12 @@ IF OBJECT_ID('[dbo].[transaction]', 'U') IS NOT NULL
 CREATE TABLE [dbo].[transaction] (
     id INT IDENTITY(1,1) PRIMARY KEY,   
     user_id INT NOT NULL,
-    amount DECIMAL(10, 2) NOT NULL,
+    amount DECIMAL(10, 2) NOT NULL DEFAULT 0,
     transaction_date DATETIME DEFAULT GETDATE(),
     status NVARCHAR(50) NOT NULL CHECK (status IN ('pending', 'completed', 'failed')),
     
     FOREIGN KEY (user_id) REFERENCES [dbo].[user](id) ON DELETE CASCADE,
-    CONSTRAINT [Transaction amount must be positive] CHECK (amount > 0)
+    CONSTRAINT [Transaction amount must be positive] CHECK (amount >= 0)
 );
 GO
 
@@ -253,5 +282,27 @@ BEGIN TRANSACTION
 	UPDATE [dbo].[movie]
 	SET rating = (rating * raterCount + (SELECT rating FROM inserted)) / raterCount
 	WHERE id = @movieIds;
+COMMIT TRANSACTION
+GO
+
+CREATE OR ALTER TRIGGER [dbo].[tg_transactionDetail_crud_updateOwnedMovie]
+ON [dbo].[transaction_detail]
+AFTER INSERT, DELETE
+AS
+BEGIN TRANSACTION
+    SET XACT_ABORT ON
+    SET NOCOUNT ON
+    
+    INSERT INTO [dbo].[owned_movie] (user_id, movie_id)
+    SELECT T.user_id, TD.movie_id
+    FROM inserted TD
+    JOIN [dbo].[transaction] T ON T.id = TD.transaction_id
+    WHERE T.status = 'completed';
+    
+    DELETE OM
+    FROM deleted TD
+    JOIN [dbo].[transaction] T ON T.id = TD.transaction_id
+    JOIN [dbo].[owned_movie] OM ON OM.user_id = T.user_id AND OM.movie_id = TD.movie_id
+    WHERE T.status = 'completed';
 COMMIT TRANSACTION
 GO
